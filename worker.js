@@ -67,6 +67,7 @@ async function handleRequest(request, env) {
   const BOT_TOKEN = env.BOT_TOKEN;
   const AUTH_CODE = env.AUTH_CODE; // 可选的认证代码
   const ADMIN_USERS = env.ADMIN_USERS ? env.ADMIN_USERS.split(',').map(id => id.trim()) : []; // 管理员用户ID列表
+  const ADMIN_ONLY = env.ADMIN_ONLY === 'true' || env.ADMIN_ONLY === true;  // 判断是否开启了仅管理员可用模式
 
   // 检查必要的环境变量是否存在
   if (!IMG_BED_URL || !BOT_TOKEN) {
@@ -107,6 +108,12 @@ async function handleRequest(request, env) {
     const isBanned = await isUserBanned(userId, env);
     const isAdmin = ADMIN_USERS.includes(userId.toString());
     
+    // 如果开启了仅限管理员使用，且当前用户不是管理员，则拒绝处理请求
+    if (ADMIN_ONLY && !isAdmin) {
+      await sendMessage(chatId, `⛔ 抱歉，您没有权限进行操作。`, env);
+      return new Response('OK', { status: 200 });
+    }
+
     // 如果用户被禁止且不是管理员，则拒绝处理请求
     if (isBanned && !isAdmin) {
       await sendMessage(chatId, `⛔ 很抱歉，您已被管理员限制使用本机器人。如需解除限制，请联系管理员。`, env);
