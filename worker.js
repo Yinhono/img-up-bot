@@ -662,12 +662,10 @@ async function handlePhoto(message, chatId, env) {
     const uploadUrl = new URL(IMG_BED_URL);
     uploadUrl.searchParams.append('returnFormat', 'full');
 
-    // 准备请求头，把认证码放在头部而不是URL参数里
+    // 准备请求头，将认证码放在 X-Access-Password 中
     const headers = {};
     if (AUTH_CODE) {
-      headers['Authorization'] = `Bearer ${AUTH_CODE}`;
-      // 同时保留URL参数认证方式，以防API要求
-      uploadUrl.searchParams.append('authCode', AUTH_CODE);
+      headers['X-Access-Password'] = AUTH_CODE;
     }
 
     console.log(`图片上传请求 URL: ${uploadUrl.toString()}`);
@@ -809,17 +807,16 @@ async function handleVideo(message, chatId, isDocument = false, env) {
       const uploadUrl = new URL(IMG_BED_URL);
       uploadUrl.searchParams.append('returnFormat', 'full');
 
-      if (AUTH_CODE) { // 检查从env获取的AUTH_CODE
-        uploadUrl.searchParams.append('authCode', AUTH_CODE);
-      }
+      // 删除 authCode 追加到 URL 的相关代码
 
-      console.log(`视频上传请求 URL: ${uploadUrl.toString()}`);
+      console.log(`上传请求 URL: ${uploadUrl.toString()}`);
 
       const uploadResponse = await fetch(uploadUrl, {
         method: 'POST',
-        headers: AUTH_CODE ? { 'Authorization': `Bearer ${AUTH_CODE}` } : {},
+        headers: AUTH_CODE ? { 'X-Access-Password': AUTH_CODE } : {},
         body: formData
       });
+
 
       const responseText = await uploadResponse.text();
       console.log('视频上传原始响应:', responseText);
@@ -948,17 +945,16 @@ async function handleAudio(message, chatId, isDocument = false, env) {
       const uploadUrl = new URL(IMG_BED_URL);
       uploadUrl.searchParams.append('returnFormat', 'full');
 
-      if (AUTH_CODE) {
-        uploadUrl.searchParams.append('authCode', AUTH_CODE);
-      }
+      // 删除 authCode 追加到 URL 的相关代码
 
-      console.log(`音频上传请求 URL: ${uploadUrl.toString()}`);
+      console.log(`上传请求 URL: ${uploadUrl.toString()}`);
 
       const uploadResponse = await fetch(uploadUrl, {
         method: 'POST',
-        headers: AUTH_CODE ? { 'Authorization': `Bearer ${AUTH_CODE}` } : {},
+        headers: AUTH_CODE ? { 'X-Access-Password': AUTH_CODE } : {},
         body: formData
       });
+
 
       const responseText = await uploadResponse.text();
       console.log('音频上传原始响应:', responseText);
@@ -1101,17 +1097,16 @@ async function handleAnimation(message, chatId, isDocument = false, env) {
       const uploadUrl = new URL(IMG_BED_URL);
       uploadUrl.searchParams.append('returnFormat', 'full');
 
-      if (AUTH_CODE) {
-        uploadUrl.searchParams.append('authCode', AUTH_CODE);
-      }
+      // 删除 authCode 追加到 URL 的相关代码
 
-      console.log(`动画上传请求 URL: ${uploadUrl.toString()}`);
+      console.log(`上传请求 URL: ${uploadUrl.toString()}`);
 
       const uploadResponse = await fetch(uploadUrl, {
         method: 'POST',
-        headers: AUTH_CODE ? { 'Authorization': `Bearer ${AUTH_CODE}` } : {},
+        headers: AUTH_CODE ? { 'X-Access-Password': AUTH_CODE } : {},
         body: formData
       });
+
 
       const responseText = await uploadResponse.text();
       console.log('动画上传原始响应:', responseText);
@@ -1283,17 +1278,16 @@ async function handleDocument(message, chatId, env) {
       const uploadUrl = new URL(IMG_BED_URL);
       uploadUrl.searchParams.append('returnFormat', 'full');
 
-      if (AUTH_CODE) {
-        uploadUrl.searchParams.append('authCode', AUTH_CODE);
-      }
+      // 删除 authCode 追加到 URL 的相关代码
 
-      console.log(`文件上传请求 URL: ${uploadUrl.toString()}`);
+      console.log(`上传请求 URL: ${uploadUrl.toString()}`);
 
       const uploadResponse = await fetch(uploadUrl, {
         method: 'POST',
-        headers: AUTH_CODE ? { 'Authorization': `Bearer ${AUTH_CODE}` } : {},
+        headers: AUTH_CODE ? { 'X-Access-Password': AUTH_CODE } : {},
         body: formData
       });
+
 
       const responseText = await uploadResponse.text();
       console.log('文件上传原始响应:', responseText);
@@ -3040,15 +3034,13 @@ async function mergeAndUploadChunks(chatId, userId, env) {
       const uploadUrl = new URL(env.IMG_BED_URL);
       uploadUrl.searchParams.append('returnFormat', 'full');
       
-      if (env.AUTH_CODE) {
-        uploadUrl.searchParams.append('authCode', env.AUTH_CODE);
-      }
+      // 删除 env.AUTH_CODE 追加到 URL 的相关代码
       
       console.log(`分片合并后的文件上传请求 URL: ${uploadUrl.toString()}`);
       
       const uploadResponse = await fetch(uploadUrl, {
         method: 'POST',
-        headers: env.AUTH_CODE ? { 'Authorization': `Bearer ${env.AUTH_CODE}` } : {},
+        headers: env.AUTH_CODE ? { 'X-Access-Password': env.AUTH_CODE } : {},
         body: formData
       });
       
