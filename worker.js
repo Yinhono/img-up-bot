@@ -1208,7 +1208,7 @@ async function handleAnimation(message, chatId, isDocument = false, env) {
 // 处理文档上传（通用文件处理）
 async function handleDocument(message, chatId, env) {
   const fileId = message.document.file_id;
-  const fileName = message.document.file_name || `file_${Date.now()}`;
+  const fileName = sanitizeFileName(message.document.file_name);
   const mimeType = message.document.mime_type || 'application/octet-stream';
   // 获取用户的文件描述作为备注
   const fileDescription = message.caption || "";
@@ -1254,32 +1254,29 @@ async function handleDocument(message, chatId, env) {
       }
 
       const formData = new FormData();
-      
-      // 修复exe文件上传问题：确保文件名保持原样，不要修改扩展名
+  
       let safeFileName = fileName;
-      
-      // 确保MIME类型正确
       let safeMimeType = mimeType;
-      // 基于文件扩展名设置正确的MIME类型
+
+      // 解决图床因 Telegram 返回 application/octet-stream 而拒绝识别图片格式的问题
+      safeMimeType = getCorrectMimeType(safeFileName, safeMimeType);
+
+      // 保留原有的特殊文件类型强制覆盖逻辑（针对非媒体文件）
       if (fileExt) {
-        // 应用程序可执行文件
         if (['exe', 'msi', 'dmg', 'pkg', 'deb', 'rpm', 'snap', 'flatpak', 'appimage'].includes(fileExt)) {
           safeMimeType = 'application/octet-stream';
         }
-        // 移动应用程序
         else if (['apk', 'ipa'].includes(fileExt)) {
           safeMimeType = 'application/vnd.android.package-archive';
         }
-        // 压缩文件
         else if (['zip', 'rar', '7z', 'tar', 'gz', 'bz2', 'xz', 'tgz', 'tbz2', 'txz'].includes(fileExt)) {
           safeMimeType = fileExt === 'zip' ? 'application/zip' : 'application/x-compressed';
         }
-        // 光盘镜像
         else if (['iso', 'img', 'vdi', 'vmdk', 'vhd', 'vhdx', 'ova', 'ovf'].includes(fileExt)) {
-          safeMimeType = 'application/octet-stream';
+           safeMimeType = 'application/octet-stream';
         }
       }
-      
+  
       formData.append('file', new File([fileBuffer], safeFileName, { type: safeMimeType }));
 
       const uploadUrl = new URL(IMG_BED_URL);
@@ -1505,6 +1502,59 @@ function extractFileName(url) {
   }
   
   return fileName || '未知文件';
+}
+
+// 清理文件名，去除非法字符和Telegram特有的奇怪后缀（如 " name=orig"）
+function sanitizeFileName(fileName) {
+    if (!fileName) return `file_${Date.now()}`;
+    
+    // 1. 移除类似 " name=orig" 的后缀
+    let cleanName = fileName.replace(/\s+name=.*$/i, '').trim();
+    
+    // 2. 提取原始扩展名，以防清理过程中丢失
+    const originalExtMatch = fileName.match(/\.([a-zA-Z0-9]+)(?:\s+name=.*)?$/);
+    const cleanExtMatch = cleanName.match(/\.([a-zA-Z0-9]+)$/);
+    
+    if (!cleanExtMatch && originalExtMatch) {
+        cleanName = cleanName + '.' + originalExtMatch[1];
+    }
+    
+    // 3. 替换文件系统或URL中不支持的特殊字符（如空格、斜杠等）为下划线
+    cleanName = cleanName.replace(/[\s\0\/\\:*?"<>|]/g, '_');
+    
+    // 4. 如果清理后还是没有扩展名，给个默认的
+    if (!cleanName.includes('.')) {
+        cleanName = `file_${Date.now()}.bin`;
+    }
+    
+    return cleanName;
+}
+
+// 根据文件扩展名获取正确的 MIME 类型，解决图床因 MIME 不匹配拒绝上传的问题
+function getCorrectMimeType(fileName, fallbackMime) {
+    if (!fileName) return fallbackMime || 'application/octet-stream';
+    const ext = fileName.split('.').pop().toLowerCase();
+    
+    const mimeMap = {
+        // 图片格式
+        'jpg': 'image/jpeg', 'jpeg': 'image/jpeg', 'png': 'image/png', 
+        'gif': 'image/gif', 'webp': 'image/webp', 'bmp': 'image/bmp', 
+        'svg': 'image/svg+xml', 'avif': 'image/avif', 'tiff': 'image/tiff', 'tif': 'image/tiff', 'heic': 'image/heic',
+        // 视频格式
+        'mp4': 'video/mp4', 'webm': 'video/webm', 'avi': 'video/x-msvideo', 
+        'mov': 'video/quicktime', 'mkv': 'video/x-matroska', 'flv': 'video/x-flv',
+        // 音频格式
+        'mp3': 'audio/mpeg', 'wav': 'audio/wav', 'ogg': 'audio/ogg', 
+        'flac': 'audio/flac', 'aac': 'audio/aac', 'm4a': 'audio/mp4'
+    };
+    
+    // 如果扩展名在映射表中，强制返回正确的 MIME 类型
+    if (mimeMap[ext]) {
+        return mimeMap[ext];
+    }
+    
+    // 否则使用 Telegram 提供的 MIME 类型或默认值
+    return fallbackMime || 'application/octet-stream';
 }
 
 // getFile 函数，接收 env 对象
