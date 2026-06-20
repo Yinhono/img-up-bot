@@ -1440,7 +1440,7 @@ function extractUrlFromResult(result, imgBedUrl) {
   if (Array.isArray(result) && result.length > 0) {
     const item = result[0];
     if (item.url) {
-      url = item.url;
+      url = normalizeUploadedUrl(item.url, baseUrl);
       fileName = item.fileName || extractFileName(url);
       fileSize = item.fileSize || 0;
     } else if (item.src) {
@@ -1465,7 +1465,7 @@ function extractUrlFromResult(result, imgBedUrl) {
     }
   } else if (result && typeof result === 'object') {
     if (result.url) {
-      url = result.url;
+      url = normalizeUploadedUrl(result.url, baseUrl);
       fileName = result.fileName || extractFileName(url);
       fileSize = result.fileSize || 0;
     } else if (result.src) {
@@ -1488,7 +1488,7 @@ function extractUrlFromResult(result, imgBedUrl) {
       fileName = result.fileName || extractFileName(result.file);
       fileSize = result.fileSize || 0;
     } else if (result.data && result.data.url) {
-      url = result.data.url;
+      url = normalizeUploadedUrl(result.data.url, baseUrl);
       fileName = result.data.fileName || extractFileName(url);
       fileSize = result.data.fileSize || 0;
     }
@@ -1695,6 +1695,14 @@ async function generateImgproxySignature(path, keyHex, saltHex) {
     
     // 返回 URL-safe Base64 格式
     return arrayBufferToBase64Url(signatureBuffer);
+}
+
+// 规范返回 URL
+function normalizeUploadedUrl(value, baseUrl) {
+  if (!value) return '';
+  if (value.startsWith('http://') || value.startsWith('https://')) return value;
+  if (value.startsWith('/')) return `${baseUrl}${value}`;
+  return `${baseUrl}/${value}`;
 }
 
 // getFile 函数，接收 env 对象
