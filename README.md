@@ -57,6 +57,7 @@
 | `IMGPROXY_URL` | imgproxy 服务地址，例如 `https://imgproxy.example.com` |
 | `IMGPROXY_KEY` | imgproxy 签名 Key（Hex 格式），未配置则使用 insecure 模式 |
 | `IMGPROXY_SALT` | imgproxy 签名 Salt（Hex 格式），未配置则使用 insecure 模式 |
+| `IMGPROXY_QUALITY` | WebP 转换质量，默认建议 `95`。取值 `1-100` 为有损质量，数值越高细节越好、体积越大；填 `101` 表示无损 WebP |
 
 ### 4. 绑定 Webhook
 
