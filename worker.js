@@ -1599,7 +1599,10 @@ async function convertToWebP(fileUrl, env) {
     const base64Url = btoa(unescape(encodeURIComponent(fileUrl)))
         .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 
-    const options = "format:webp";
+    const quality = Number(env.IMGPROXY_QUALITY || 95);
+    const options = quality === 101
+      ? "format:webp/lossless:1/strip_metadata:0"
+      : `format:webp/quality:${Math.min(100,    Math.max(1, quality))}/strip_metadata:0`;
     // imgproxy 签名的 PATH 必须包含前导斜杠，例如：/format:webp/base64url
     const pathToSign = `/${options}/${base64Url}`;
 
