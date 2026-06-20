@@ -646,11 +646,26 @@ async function handlePhoto(message, chatId, env) {
   if (fileInfo && fileInfo.ok) {
     const filePath = fileInfo.result.file_path;
     const fileUrl = `https://api.telegram.org/file/bot${BOT_TOKEN}/${filePath}`;
-
-    const imgResponse = await fetch(fileUrl);
-    const imgBuffer = await imgResponse.arrayBuffer();
+    
+    let imgBuffer;
+    let fileName = `image_${Date.now()}.jpg`;
+    let mimeType = 'image/jpeg';
+    
+    // 👇 尝试调用 imgproxy 转换为 WebP
+    const converted = await convertToWebP(fileUrl, env);
+    if (converted) {
+        imgBuffer = converted.buffer;
+        mimeType = converted.mimeType;
+        fileName = `image_${Date.now()}.webp`;
+        console.log('图片已成功转换为 WebP');
+    } else {
+        // 转换未启用或失败，下载原图
+        const imgResponse = await fetch(fileUrl);
+        if (!imgResponse.ok) throw new Error(`获取图片失败: ${imgResponse.status}`);
+        imgBuffer = await imgResponse.arrayBuffer();
+    }
+    
     const fileSize = imgBuffer.byteLength;
-    const fileName = `image_${Date.now()}.jpg`;
 
     // 添加大小检查
     if (fileSize / (1024 * 1024) > 20) { // 20MB
@@ -664,7 +679,8 @@ async function handlePhoto(message, chatId, env) {
     }
 
     const formData = new FormData();
-    formData.append('file', new File([imgBuffer], fileName, { type: 'image/jpeg' }));
+    // 使用动态的 mimeType 和 fileName
+    formData.append('file', new File([imgBuffer], fileName, { type: mimeType })) ;
 
     const uploadUrl = new URL(IMG_BED_URL);
     uploadUrl.searchParams.append('returnFormat', 'full');
@@ -1236,10 +1252,37 @@ async function handleDocument(message, chatId, env) {
     const fileUrl = `https://api.telegram.org/file/bot${BOT_TOKEN}/${filePath}`;
 
     try {
-      const fileResponse = await fetch(fileUrl);
-      if (!fileResponse.ok) throw new Error(`获取文件失败: ${fileResponse.status}`);
-
-      const fileBuffer = await fileResponse.arrayBuffer();
+      let fileBuffer;
+      let safeFileName = fileName;
+      let safeMimeType = mimeType;
+    
+      // 解决图床因 Telegram 返回 application/octet-stream 而拒绝识别图片格式的问题
+      safeMimeType = getCorrectMimeType(safeFileName, safeMimeType);
+    
+      // 👇 判断是否为常见静态图片格式，以决定是否尝试转换为 WebP
+      const imageExts = ['jpg', 'jpeg', 'png', 'bmp', 'tiff', 'tif', 'heic', 'heif'];
+      const ext = safeFileName.split('.').pop().toLowerCase();
+      const shouldConvertImage = imageExts.includes(ext);
+    
+      if (shouldConvertImage) {
+          const converted = await convertToWebP(fileUrl, env);
+          if (converted) {
+              fileBuffer = converted.buffer;
+              safeMimeType = converted.mimeType;
+              // 替换文件扩展名为 .webp
+              safeFileName = safeFileName.replace(/\.[^/.]+$/, "") + '.webp';
+              console.log(`文档图片 ${fileName} 已成功转换为 WebP`);
+          } else {
+              const fileResponse = await fetch(fileUrl);
+              if (!fileResponse.ok) throw new Error(`获取文件失败: ${fileResponse.status}`);
+              fileBuffer = await fileResponse.arrayBuffer();
+          }
+      } else {
+          const fileResponse = await fetch(fileUrl);
+          if (!fileResponse.ok) throw new Error(`获取文件失败: ${fileResponse.status}`);
+          fileBuffer = await fileResponse.arrayBuffer();
+      }
+    
       const fileSize = fileBuffer.byteLength;
       const fileSizeFormatted = formatFileSize(fileSize);
 
@@ -1254,12 +1297,6 @@ async function handleDocument(message, chatId, env) {
       }
 
       const formData = new FormData();
-  
-      let safeFileName = fileName;
-      let safeMimeType = mimeType;
-
-      // 解决图床因 Telegram 返回 application/octet-stream 而拒绝识别图片格式的问题
-      safeMimeType = getCorrectMimeType(safeFileName, safeMimeType);
 
       // 保留原有的特殊文件类型强制覆盖逻辑（针对非媒体文件）
       if (fileExt) {
@@ -1555,6 +1592,48 @@ function getCorrectMimeType(fileName, fallbackMime) {
     
     // 否则使用 Telegram 提供的 MIME 类型或默认值
     return fallbackMime || 'application/octet-stream';
+}
+
+// 辅助函数：调用 imgproxy 将图片转换为 WebP
+async function convertToWebP(fileUrl, env) {
+    const enableConvert = env.ENABLE_WEBP_CONVERT === 'true' || env.ENABLE_WEBP_CONVERT === true;
+    const imgproxyUrl = env.IMGPROXY_URL;
+
+    // 如果未开启或未配置地址，直接返回 null，表示不需要转换，允许走原图逻辑
+    if (!enableConvert || !imgproxyUrl) {
+        return null; 
+    }
+
+    // 去除末尾的斜杠，防止 URL 拼接错误
+    const baseUrl = imgproxyUrl.endsWith('/') ? imgproxyUrl.slice(0, -1) : imgproxyUrl;
+    
+    // 将 source URL 进行 URL-safe Base64 编码 (符合 imgproxy 规范，兼容特殊字符)
+    const base64Url = btoa(unescape(encodeURIComponent(fileUrl)))
+        .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+    
+    // 构造 imgproxy 请求 URL
+    // 使用 'insecure' 作为签名占位符（适用于未开启 URL 签名校验的实例）
+    // 使用 format:webp 选项强制转换为 WebP
+    const proxyUrl = `${baseUrl}/insecure/format:webp/${base64Url}`;
+    
+    console.log(`请求 imgproxy 转换图片: ${proxyUrl}`);
+    
+    // 直接让网络请求抛出异常
+    const response = await fetch(proxyUrl);
+    
+    if (!response.ok) {
+        // 尝试读取 imgproxy 返回的错误详情
+        const errorText = await response.text().catch(() => 'Unknown error');
+        // 直接抛出错误，中断后续上传流程
+        throw new Error(`imgproxy 转换失败: ${response.status} ${response.statusText} | ${errorText.substring(0, 100)}`);
+    }
+    
+    const webpBuffer = await response.arrayBuffer();
+    return {
+        buffer: webpBuffer,
+        mimeType: 'image/webp',
+        extension: 'webp'
+    };
 }
 
 // getFile 函数，接收 env 对象
