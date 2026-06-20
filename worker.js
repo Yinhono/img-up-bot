@@ -5,11 +5,11 @@ export default {
     // 特殊路径处理：设置Webhook
     const url = new URL(request.url);
     if (url.pathname === '/setup-webhook') {
-      return handleSetupWebhook(request, env);
+      return await handleSetupWebhook(request, env);
     }
     
     try {
-      return handleRequest(request, env);
+      return await handleRequest(request, env);
     } catch (error) {
       console.error("主函数出错：", error);
       return new Response('处理请求时出错', { status: 500 });
@@ -92,6 +92,9 @@ async function handleRequest(request, env) {
     return new Response('只接受POST请求', { status: 405 });
   }
 
+  // 提前声明 chatId，确保 catch 块中可访问
+  let chatId;
+
   try {
     const update = await request.json();
     console.log("收到Telegram更新，消息类型:", update.message ? Object.keys(update.message).filter(k => ['text', 'photo', 'video', 'document', 'audio', 'animation'].includes(k)).join(',') : 'no message');
@@ -99,7 +102,7 @@ async function handleRequest(request, env) {
     if (!update.message) return new Response('OK', { status: 200 });
 
     const message = update.message;
-    const chatId = message.chat.id;
+    chatId = message.chat.id;
     const userId = message.from.id; // 获取用户ID
     const username = message.from.username || '未知用户';
     const text = message.text?.trim();
@@ -137,7 +140,8 @@ async function handleRequest(request, env) {
         }
         
         if (subCommand === 'ban' && targetId) {
-          await banUser(targetId, username, env);
+          const banReason = text.split(' ').slice(3).join(' ') || '管理员操作';
+          await banUser(targetId, banReason, env);
           await sendMessage(chatId, `✅ 已限制用户 ${targetId} 使用机器人`, env);
           return new Response('OK', { status: 200 });
         }
@@ -535,11 +539,7 @@ async function handleRequest(request, env) {
         }
         
         const errorMsg = `❌ 处理视频时出错。${errorDetails}\n\n建议尝试:\n1. 重新发送视频\n2. 如果视频较大，可以尝试压缩后再发送\n3. 尝试将视频转换为MP4格式`;
-        if (messageId) {
-          await editMessage(chatId, messageId, errorMsg, env);
-        } else {
-          await sendMessage(chatId, errorMsg, env);
-        }
+        await sendMessage(chatId, errorMsg, env);
       }
     }
     // 自动处理音频
@@ -559,11 +559,7 @@ async function handleRequest(request, env) {
         }
         
         const errorMsg = `❌ 处理音频时出错。${errorDetails}\n\n建议尝试:\n1. 重新发送音频\n2. 尝试将音频转换为MP3格式`;
-        if (messageId) {
-          await editMessage(chatId, messageId, errorMsg, env);
-        } else {
-          await sendMessage(chatId, errorMsg, env);
-        }
+        await sendMessage(chatId, errorMsg, env);
       }
     }
     // 自动处理动画/GIF
@@ -583,11 +579,7 @@ async function handleRequest(request, env) {
         }
         
         const errorMsg = `❌ 处理动画时出错。${errorDetails}\n\n建议尝试:\n1. 重新发送GIF\n2. 尝试将动画转换为标准GIF格式`;
-        if (messageId) {
-          await editMessage(chatId, messageId, errorMsg, env);
-        } else {
-          await sendMessage(chatId, errorMsg, env);
-        }
+        await sendMessage(chatId, errorMsg, env);
       }
     }
     // 处理其他所有文档类型
@@ -605,11 +597,7 @@ async function handleRequest(request, env) {
         }
         
         const errorMsg = `❌ 处理文件时出错。${errorDetails}\n\n建议尝试:\n1. 重新发送文件\n2. 如果文件较大，可以尝试压缩后再发送`;
-        if (messageId) {
-          await editMessage(chatId, messageId, errorMsg, env);
-        } else {
-          await sendMessage(chatId, errorMsg, env);
-        }
+        await sendMessage(chatId, errorMsg, env);
       }
     } else {
       console.log("收到无法处理的消息类型");
@@ -651,7 +639,7 @@ async function handlePhoto(message, chatId, env) {
     let fileName = `image_${Date.now()}.jpg`;
     let mimeType = 'image/jpeg';
     
-    // 👇 尝试调用 imgproxy 转换为 WebP
+    // 尝试调用 imgproxy 转换为 WebP
     const converted = await convertToWebP(fileUrl, env);
     if (converted) {
         imgBuffer = converted.buffer;
@@ -1259,7 +1247,7 @@ async function handleDocument(message, chatId, env) {
       // 解决图床因 Telegram 返回 application/octet-stream 而拒绝识别图片格式的问题
       safeMimeType = getCorrectMimeType(safeFileName, safeMimeType);
     
-      // 👇 判断是否为常见静态图片格式，以决定是否尝试转换为 WebP
+      // 判断是否为常见静态图片格式，以决定是否尝试转换为 WebP
       const imageExts = ['jpg', 'jpeg', 'png', 'bmp', 'tiff', 'tif', 'heic', 'heif'];
       const ext = safeFileName.split('.').pop().toLowerCase();
       const shouldConvertImage = imageExts.includes(ext);
@@ -1594,11 +1582,11 @@ function getCorrectMimeType(fileName, fallbackMime) {
     return fallbackMime || 'application/octet-stream';
 }
 
-// 辅助函数：调用 imgproxy 将图片转换为 WebP
+// 辅助函数：调用 imgproxy 将图片转换为 WebP (支持 URL 签名)
 async function convertToWebP(fileUrl, env) {
     const enableConvert = env.ENABLE_WEBP_CONVERT === 'true' || env.ENABLE_WEBP_CONVERT === true;
     const imgproxyUrl = env.IMGPROXY_URL;
-
+    
     // 如果未开启或未配置地址，直接返回 null，表示不需要转换，允许走原图逻辑
     if (!enableConvert || !imgproxyUrl) {
         return null; 
@@ -1606,34 +1594,107 @@ async function convertToWebP(fileUrl, env) {
 
     // 去除末尾的斜杠，防止 URL 拼接错误
     const baseUrl = imgproxyUrl.endsWith('/') ? imgproxyUrl.slice(0, -1) : imgproxyUrl;
-    
+
     // 将 source URL 进行 URL-safe Base64 编码 (符合 imgproxy 规范，兼容特殊字符)
     const base64Url = btoa(unescape(encodeURIComponent(fileUrl)))
         .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-    
-    // 构造 imgproxy 请求 URL
-    // 使用 'insecure' 作为签名占位符（适用于未开启 URL 签名校验的实例）
-    // 使用 format:webp 选项强制转换为 WebP
-    const proxyUrl = `${baseUrl}/insecure/format:webp/${base64Url}`;
-    
+
+    const options = "format:webp";
+    // imgproxy 签名的 PATH 必须包含前导斜杠，例如：/format:webp/base64url
+    const pathToSign = `/${options}/${base64Url}`;
+
+    let signature = "insecure"; // 默认降级为 insecure
+    const keyHex = env.IMGPROXY_KEY;
+    const saltHex = env.IMGPROXY_SALT;
+
+    // 如果配置了 Key 和 Salt，则生成真实签名
+    if (keyHex && saltHex) {
+        try {
+            signature = await generateImgproxySignature(pathToSign, keyHex, saltHex);
+            console.log("imgproxy URL 签名成功");
+        } catch (e) {
+            console.error("imgproxy 签名生成失败:", e);
+            throw new Error(`imgproxy 签名失败: ${e.message}`);
+        }
+    } else {
+        console.log("未配置 IMGPROXY_KEY 或 IMGPROXY_SALT，使用 insecure 模式");
+    }
+
+    // 构造最终的 imgproxy 请求 URL: baseUrl + / + signature + pathToSign
+    const proxyUrl = `${baseUrl}/${signature}${pathToSign}`;
+
     console.log(`请求 imgproxy 转换图片: ${proxyUrl}`);
-    
+
     // 直接让网络请求抛出异常
     const response = await fetch(proxyUrl);
-    
+
     if (!response.ok) {
         // 尝试读取 imgproxy 返回的错误详情
         const errorText = await response.text().catch(() => 'Unknown error');
         // 直接抛出错误，中断后续上传流程
         throw new Error(`imgproxy 转换失败: ${response.status} ${response.statusText} | ${errorText.substring(0, 100)}`);
     }
-    
+
     const webpBuffer = await response.arrayBuffer();
     return {
         buffer: webpBuffer,
         mimeType: 'image/webp',
         extension: 'webp'
     };
+}
+
+// 将 Hex 字符串转换为 ArrayBuffer (用于 Crypto API)
+function hexToArrayBuffer(hex) {
+    if (!hex) return new ArrayBuffer(0);
+    // 清理可能存在的 0x 前缀和空格
+    hex = hex.replace(/^0x/i, '').replace(/\s+/g, '');
+    if (hex.length % 2 !== 0) {
+        throw new Error("无效的 Hex 字符串长度");
+    }
+    const bytes = new Uint8Array(hex.length / 2);
+    for (let i = 0; i < hex.length; i += 2) {
+        bytes[i / 2] = parseInt(hex.substr(i, 2), 16);
+    }
+    return bytes.buffer;
+}
+
+// 将 ArrayBuffer 转换为 URL-safe Base64 (符合 imgproxy 签名规范)
+function arrayBufferToBase64Url(buffer) {
+    const bytes = new Uint8Array(buffer);
+    let binary = '';
+    for (let i = 0; i < bytes.byteLength; i++) {
+        binary += String.fromCharCode(bytes[i]);
+    }
+    return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+// 生成 imgproxy HMAC-SHA256 签名
+async function generateImgproxySignature(path, keyHex, saltHex) {
+    const keyBuffer = hexToArrayBuffer(keyHex);
+    const saltBuffer = hexToArrayBuffer(saltHex);
+    
+    // 导入 HMAC-SHA256 密钥
+    const cryptoKey = await crypto.subtle.importKey(
+        "raw",
+        keyBuffer,
+        { name: "HMAC", hash: "SHA-256" },
+        false,
+        ["sign"]
+    );
+    
+    // 将 PATH 转换为 Uint8Array
+    const pathBuffer = new TextEncoder().encode(path);
+    
+    // imgproxy 签名规则: HMAC_SHA256(KEY, SALT + PATH)
+    const dataToSign = new Uint8Array(saltBuffer.byteLength + pathBuffer.byteLength);
+    dataToSign.set(new Uint8Array(saltBuffer), 0);
+    dataToSign.set(new Uint8Array(pathBuffer), saltBuffer.byteLength);
+    
+    // 计算签名
+    const signatureBuffer = await crypto.subtle.sign("HMAC", cryptoKey, dataToSign);
+    
+    // 返回 URL-safe Base64 格式
+    return arrayBufferToBase64Url(signatureBuffer);
 }
 
 // getFile 函数，接收 env 对象
@@ -1701,7 +1762,7 @@ async function sendMessage(chatId, text, env) {
     const body = JSON.stringify({
       chat_id: chatId,
       text: text,
-      parse_mode: 'HTML',
+      parse_mode: 'Markdown',
     });
     
     console.log(`请求体: ${body.substring(0, 50)}...`);
@@ -1742,7 +1803,7 @@ async function editMessage(chatId, messageId, text, env) {
         chat_id: chatId,
         message_id: messageId,
         text: text,
-        parse_mode: 'HTML',
+        parse_mode: 'Markdown',
       }),
     });
     return await response.json();
@@ -1867,47 +1928,64 @@ function formatFileSize(bytes, decimals = 2) {
   return parseFloat((bytes / Math.pow(k, i)).toFixed(dm)) + ' ' + sizes[i];
 }
 
-// 检查文件扩展名是否在支持列表中
+// 检查文件扩展名是否在支持列表中（已去重）
+const VALID_EXTENSIONS = new Set([
+  // 常见图像格式
+  'jpeg', 'jpg', 'png', 'gif', 'webp', 'svg', 'eps', 'psd', 'ai', 'sketch', 'fig', 'ico',
+  // 小众图像格式
+  'bmp', 'tiff', 'tif', 'pcx', 'tga', 'icns', 'heic', 'heif', 'avif',
+  'arw', 'cr2', 'nef', 'orf', 'rw2', 'dng', 'raf', 'raw',
+  // 常见视频格式
+  'mp4', 'm4v', 'avi', 'mkv', 'mov', 'wmv', 'flv', 'webm', '3gp',
+  // 小众视频格式
+  'rmvb', 'rm', 'asf', 'amv', 'mts', 'm2ts', 'vob', 'divx', 'mpeg', 'mpg', 'mpe', 'tp', 'ogm', 'ogv',
+  // 常见音频格式
+  'mp3', 'ogg', 'wav', 'flac', 'aac', 'm4a', 'opus', 'mid', 'midi',
+  // 小众音频格式
+  'ape', 'wma', 'ra', 'amr', 'au', 'voc', 'ac3', 'dsf', 'dsd', 'dts', 'dtsma', 'ast', 'aiff', 'aifc', 'spx', 'gsm', 'wv', 'tta', 'mpc', 'tak',
+  // 文档格式
+  'pdf', 'doc', 'docx', 'ppt', 'pptx', 'xls', 'xlsx',
+  'txt', 'md', 'csv', 'rtf', 'odt', 'ott', 'odp', 'otp', 'ods', 'ots', 'odb',
+  // 电子书格式
+  'epub', 'mobi', 'azw', 'azw1', 'azw3', 'azw4', 'azw6', 'fb2', 'djvu',
+  'cbz', 'cbr', 'cb7', 'cbt', 'cba', 'lit', 'lrf', 'opf', 'prc',
+  'chm', 'xps', 'oxps', 'ps', 'dvi',
+  // 代码和标记语言
+  'json', 'xml', 'html', 'css', 'js', 'ts', 'yaml', 'yml', 'toml', 'sql',
+  'go', 'java', 'php', 'py', 'rb', 'sh', 'bat', 'cmd', 'ps1', 'psm1', 'vbs',
+  'c', 'cpp', 'h', 'hpp', 'cs', 'swift', 'kt', 'rs', 'dart', 'lua',
+  'groovy', 'scala', 'perl', 'r',
+  // 小众开发和数据格式
+  'wasm', 'wat', 'f', 'for', 'f90', 'f95', 'hs', 'lhs', 'elm', 'clj',
+  'tsv', 'parquet', 'avro', 'proto', 'pbtxt', 'fbs',
+  // 压缩包格式
+  'zip', 'rar', '7z', 'tar', 'gz', 'bz2', 'xz', 'tgz', 'tbz2', 'txz',
+  // 小众档案格式
+  'z', 'lz', 'lzma', 'lzo', 'rz', 'sfx', 'cab', 'arj', 'lha', 'lzh',
+  'zoo', 'arc', 'ace', 'dgc', 'dgn', 'lbr', 'pak', 'pit', 'sit', 'sqx',
+  // 应用程序包
+  'apk', 'ipa', 'exe', 'msi', 'dmg', 'pkg', 'deb', 'rpm', 'snap', 'flatpak', 'appimage',
+  // 光盘镜像
+  'iso', 'img', 'vdi', 'vmdk', 'vhd', 'vhdx', 'ova', 'ovf',
+  'qcow2', 'pvm', 'dsk', 'hdd', 'bin', 'cue', 'mds', 'mdf', 'nrg',
+  'ccd', 'cif', 'c2d', 'daa', 'b6t', 'b5t', 'bwt', 'isz', 'cdi', 'flp', 'uif', 'xdi', 'sdi',
+  // 字体
+  'ttf', 'otf', 'woff', 'woff2', 'eot',
+  // 浏览器扩展及 Java 包
+  'crx', 'xpi', 'jar', 'war', 'ear',
+  // 种子
+  'torrent',
+  // 3D和游戏相关格式
+  'obj', 'fbx', 'dae', '3ds', 'stl', 'gltf', 'glb', 'blend', 'mb',
+  'unity3d', 'unitypackage', 'max', 'c4d', 'w3x', 'pk3', 'wad', 'bsp', 'map',
+  'rom', 'n64', 'z64', 'v64', 'nes', 'smc', 'sfc', 'gb', 'gbc', 'gba', 'nds',
+  // 科学和专业格式
+  'mat', 'fits', 'hdf', 'hdf5', 'h5', 'nx', 'ngc', 'nxs', 'nb',
+  'cdf', 'nc', 'spss', 'sav', 'dta', 'do',
+]);
+
 function isExtValid(fileExt) {
-  return ['jpeg', 'jpg', 'png', 'gif', 'webp', 
-    'mp4', 'mp3', 'ogg',
-    'mp3', 'wav', 'flac', 'aac', 'opus',
-    'doc', 'docx', 'ppt', 'pptx', 'xls', 'xlsx', 'pdf', 
-    'txt', 'md', 'json', 'xml', 'html', 'css', 'js', 'ts', 'go', 'java', 'php', 'py', 'rb', 'sh', 'bat', 'cmd', 'ps1', 'psm1', 'psd', 'ai', 'sketch', 'fig', 'svg', 'eps', 
-    // 压缩包格式
-    'zip', 'rar', '7z', 'tar', 'gz', 'bz2', 'xz', 'tgz', 'tbz2', 'txz',
-    // 应用程序包
-    'apk', 'ipa', 'exe', 'msi', 'dmg', 'pkg', 'deb', 'rpm', 'snap', 'flatpak', 'appimage',
-    // 光盘镜像
-    'iso', 'img', 'vdi', 'vmdk', 'vhd', 'vhdx', 'ova', 'ovf',
-    // 文档格式
-    'epub', 'mobi', 'azw', 'azw3', 'fb2', 'djvu', 'cbz', 'cbr',
-    // 字体
-    'ttf', 'otf', 'woff', 'woff2', 'eot', 
-    // 其他文件格式
-    'torrent', 'ico', 'crx', 'xpi', 'jar', 'war', 'ear',
-    'qcow2', 'pvm', 'dsk', 'hdd', 'bin', 'cue', 'mds', 'mdf', 'nrg', 'ccd', 'cif', 'c2d', 'daa', 'b6t', 'b5t', 'bwt', 'isz', 'cdi', 'flp', 'uif', 'xdi', 'sdi',
-    // 源代码文件
-    'c', 'cpp', 'h', 'hpp', 'cs', 'swift', 'kt', 'rs', 'dart', 'lua', 'groovy', 'scala', 'perl', 'r', 'vbs', 'sql', 'yaml', 'yml', 'toml',
-    // 视频和音频相关
-    'avi', 'mkv', 'mov', 'wmv', 'flv', 'webm', '3gp', 'm4v', 'm4a', 'mid', 'midi',
-    // 小众图像格式
-    'tiff', 'tif', 'bmp', 'pcx', 'tga', 'icns', 'heic', 'heif', 'arw', 'cr2', 'nef', 'orf', 'rw2', 'dng', 'raf', 'raw',
-    // 小众档案格式
-    'z', 'lz', 'lzma', 'lzo', 'rz', 'sfx', 'cab', 'arj', 'lha', 'lzh', 'zoo', 'arc', 'ace', 'dgc', 'dgn', 'lbr', 'pak', 'pit', 'sit', 'sqx', 'gz.gpg', 'z.gpg',
-    // 小众视频格式
-    'rmvb', 'rm', 'asf', 'amv', 'mts', 'm2ts', 'vob', 'divx', 'mpeg', 'mpg', 'mpe', 'tp', 'ts', 'ogm', 'ogv', 
-    // 小众音频格式
-    'ape', 'wma', 'ra', 'amr', 'au', 'voc', 'ac3', 'dsf', 'dsd', 'dts', 'dtsma', 'ast', 'aiff', 'aifc', 'spx', 'gsm', 'wv', 'tta', 'mpc', 'tak',
-    // 小众电子书和文档格式
-    'lit', 'lrf', 'opf', 'prc', 'azw1', 'azw4', 'azw6', 'cbz', 'cbr', 'cb7', 'cbt', 'cba', 'chm', 'xps', 'oxps', 'ps', 'dvi',
-    // 小众开发和数据格式
-    'wasm', 'wat', 'f', 'for', 'f90', 'f95', 'hs', 'lhs', 'elm', 'clj', 'csv', 'tsv', 'parquet', 'avro', 'proto', 'pbtxt', 'fbs',
-    // 3D和游戏相关格式
-    'obj', 'fbx', 'dae', '3ds', 'stl', 'gltf', 'glb', 'blend', 'mb', 'unity3d', 'unitypackage', 'max', 'c4d', 'w3x', 'pk3', 'wad', 'bsp', 'map', 'rom', 'n64', 'z64', 'v64', 'nes', 'smc', 'sfc', 'gb', 'gbc', 'gba', 'nds',
-    // 科学和专业格式
-    'mat', 'fits', 'hdf', 'hdf5', 'h5', 'nx', 'ngc', 'nxs', 'nb', 'cdf', 'nc', 'spss', 'sav', 'dta', 'do', 'odb', 'odt', 'ott', 'odp', 'otp', 'ods', 'ots'
-  ].includes(fileExt.toLowerCase());
+  return VALID_EXTENSIONS.has(fileExt.toLowerCase());
 }
 
 // 更新用户统计数据
@@ -2664,13 +2742,10 @@ function getCurrentChineseTime() {
   return toChineseTime(new Date());
 }
 
-// 创建一个获取当前东八区时间的ISO字符串的函数
+// 返回当前 UTC 时间的 ISO 字符串，用于持久化存储时间戳。
+// 显示给用户时统一由 formatDate() 转换为东八区。
 function getChineseISOString() {
-  // 获取当前中国时间
-  const chinaTime = getCurrentChineseTime();
-  // 将中国时间转换回UTC以获得正确的ISO字符串
-  const utcTime = new Date(chinaTime.getTime() - 8 * 60 * 60 * 1000);
-  return utcTime.toISOString();
+  return new Date().toISOString();
 }
 
 // 获取自动清理设置
