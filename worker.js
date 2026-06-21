@@ -1582,14 +1582,26 @@ function getCorrectMimeType(fileName, fallbackMime) {
     return fallbackMime || 'application/octet-stream';
 }
 
-// 辅助函数：调用 imgproxy 将图片转换为 WebP (支持 URL 签名)
+// WebP 转换入口
+// 由环境变量 WEBP_CONVERT 控制后端：
+//   WEBP_CONVERT=cloudinary  → 使用 Cloudinary
+//   WEBP_CONVERT=imgproxy    → 使用 imgproxy
+//   未设置 / 其他值           → 不转换，使用原图
 async function convertToWebP(fileUrl, env) {
-    const enableConvert = env.ENABLE_WEBP_CONVERT === 'true' || env.ENABLE_WEBP_CONVERT === true;
+    const backend = (env.WEBP_CONVERT || '').toLowerCase().trim();
+
+    if (backend === 'cloudinary') {
+        return await convertToWebPViaCloudinary(fileUrl, env);
+    }
+
+    if (backend !== 'imgproxy') {
+        return null;
+    }
+
+    // ── imgproxy 逻辑 ──
     const imgproxyUrl = env.IMGPROXY_URL;
-    
-    // 如果未开启或未配置地址，直接返回 null，表示不需要转换，允许走原图逻辑
-    if (!enableConvert || !imgproxyUrl) {
-        return null; 
+    if (!imgproxyUrl) {
+        throw new Error('WEBP_CONVERT=imgproxy 但未配置 IMGPROXY_URL');
     }
 
     // 去除末尾的斜杠，防止 URL 拼接错误
@@ -1599,7 +1611,7 @@ async function convertToWebP(fileUrl, env) {
     const base64Url = btoa(unescape(encodeURIComponent(fileUrl)))
         .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 
-    const quality = Number(env.IMGPROXY_QUALITY || 95);
+    const quality = Number(env.WEBP_QUALITY || 85);
     const options = quality === 101
       ? "format:webp/lossless:1/strip_metadata:0"
       : `format:webp/quality:${Math.min(100,    Math.max(1, quality))}/strip_metadata:0`;
@@ -1699,6 +1711,123 @@ async function generateImgproxySignature(path, keyHex, saltHex) {
     // 返回 URL-safe Base64 格式
     return arrayBufferToBase64Url(signatureBuffer);
 }
+
+// ─────────────────────────────────────────────────────────
+// Cloudinary WebP 转换支持（WEBP_CONVERT=cloudinary 时启用）
+// 必填环境变量：
+//   CLOUDINARY_CLOUD_NAME           - Cloudinary Cloud Name
+//   CLOUDINARY_API_KEY              - Cloudinary API Key
+//   CLOUDINARY_API_SECRET           - Cloudinary API Secret
+// 选填环境变量：
+//   WEBP_QUALITY                    - WebP 质量 1-100，默认 85（imgproxy 填 101 可开启无损模式）
+//   CLOUDINARY_DELETE_AFTER_CONVERT - 设为 'false' 可保留转换后的图片（默认转换后自动删除）
+// ─────────────────────────────────────────────────────────
+
+// SHA-1 哈希工具（Cloudinary 签名使用 SHA-1）
+async function sha1Hex(message) {
+    const msgBuffer = new TextEncoder().encode(message);
+    const hashBuffer = await crypto.subtle.digest('SHA-1', msgBuffer);
+    return Array.from(new Uint8Array(hashBuffer))
+        .map(b => b.toString(16).padStart(2, '0'))
+        .join('');
+}
+
+// 调用 Cloudinary 将图片上传并转换为 WebP，转换完毕后异步删除
+async function convertToWebPViaCloudinary(fileUrl, env) {
+    const cloudName = env.CLOUDINARY_CLOUD_NAME;
+    const apiKey    = env.CLOUDINARY_API_KEY;
+    const apiSecret = env.CLOUDINARY_API_SECRET;
+
+    if (!cloudName || !apiKey || !apiSecret) {
+        console.log('Cloudinary 凭证未完整配置，跳过转换');
+        return null;
+    }
+
+    const quality  = Math.min(100, Math.max(1, Number(env.WEBP_QUALITY || 85)));
+    const timestamp = Math.floor(Date.now() / 1000).toString();
+
+    // 生成签名：SHA1("format=webp&quality=<q>&timestamp=<ts><secret>")
+    const paramsToSign = `format=webp&quality=${quality}&timestamp=${timestamp}${apiSecret}`;
+    const signature = await sha1Hex(paramsToSign);
+
+    // 上传到 Cloudinary，带 format 和 quality transformation
+    const formData = new FormData();
+    formData.append('file',      fileUrl);
+    formData.append('api_key',   apiKey);
+    formData.append('timestamp', timestamp);
+    formData.append('signature', signature);
+    formData.append('format',    'webp');
+    formData.append('quality',   quality.toString());
+
+    const uploadUrl = `https://api.cloudinary.com/v1_1/${cloudName}/image/upload`;
+    console.log(`请求 Cloudinary 转换图片 (quality=${quality}): ${uploadUrl}`);
+
+    const uploadResponse = await fetch(uploadUrl, { method: 'POST', body: formData });
+
+    if (!uploadResponse.ok) {
+        const errText = await uploadResponse.text().catch(() => 'Unknown error');
+        throw new Error(`Cloudinary 上传失败: ${uploadResponse.status} | ${errText.substring(0, 150)}`);
+    }
+
+    const uploadResult = await uploadResponse.json();
+    const webpUrl  = uploadResult.secure_url;
+    const publicId = uploadResult.public_id;
+
+    if (!webpUrl) {
+        throw new Error('Cloudinary 未返回有效的 secure_url');
+    }
+
+    console.log(`Cloudinary 转换成功，WebP URL: ${webpUrl}`);
+
+    // 拉取转换后的 WebP 内容
+    const webpResponse = await fetch(webpUrl);
+    if (!webpResponse.ok) {
+        throw new Error(`获取 Cloudinary 转换后图片失败: ${webpResponse.status}`);
+    }
+    const webpBuffer = await webpResponse.arrayBuffer();
+
+    // 异步清理 Cloudinary 上的临时图片（默认开启，设 CLOUDINARY_DELETE_AFTER_CONVERT=false 可禁用）
+    if (publicId && env.CLOUDINARY_DELETE_AFTER_CONVERT !== 'false') {
+        deleteFromCloudinary(publicId, cloudName, apiKey, apiSecret)
+            .catch(e => console.error('删除 Cloudinary 临时图片失败:', e));
+    }
+
+    return {
+        buffer:    webpBuffer,
+        mimeType:  'image/webp',
+        extension: 'webp'
+    };
+}
+
+// 删除 Cloudinary 上的图片资源
+async function deleteFromCloudinary(publicId, cloudName, apiKey, apiSecret) {
+    const timestamp    = Math.floor(Date.now() / 1000).toString();
+    const paramsToSign = `public_id=${publicId}&timestamp=${timestamp}${apiSecret}`;
+    const signature    = await sha1Hex(paramsToSign);
+
+    const formData = new FormData();
+    formData.append('public_id', publicId);
+    formData.append('api_key',   apiKey);
+    formData.append('timestamp', timestamp);
+    formData.append('signature', signature);
+
+    const destroyUrl = `https://api.cloudinary.com/v1_1/${cloudName}/image/destroy`;
+    const resp = await fetch(destroyUrl, { method: 'POST', body: formData });
+
+    if (!resp.ok) {
+        const errText = await resp.text().catch(() => '');
+        throw new Error(`Cloudinary destroy 失败: ${resp.status} | ${errText.substring(0, 100)}`);
+    }
+
+    const result = await resp.json();
+    if (result.result !== 'ok') {
+        console.warn(`Cloudinary destroy 结果非预期: ${JSON.stringify(result)}`);
+    } else {
+        console.log(`Cloudinary 临时图片已删除: ${publicId}`);
+    }
+}
+
+// ─────────────────────────────────────────────────────────
 
 // 规范返回 URL
 function normalizeUploadedUrl(value, baseUrl) {
