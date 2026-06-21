@@ -1743,11 +1743,14 @@ async function convertToWebPViaCloudinary(fileUrl, env) {
         return null;
     }
 
-    const quality   = Math.min(100, Math.max(1, Number(env.WEBP_QUALITY || 85)));
-    const timestamp = Math.floor(Date.now() / 1000).toString();
+    const rawQuality     = Number(env.WEBP_QUALITY || 85);
+    // Cloudinary 无损 WebP：省略 quality 参数 + 原图为 PNG 等无损格式时自动输出无损
+    // WEBP_QUALITY=101 → 省略 quality（无损模式）；其他 → q_<n> 有损
+    const eagerTransform = rawQuality === 101 ? 'f_webp' : `q_${rawQuality},f_webp`;
+    const timestamp      = Math.floor(Date.now() / 1000).toString();
 
-    // quality 不是 Cloudinary 上传 API 的签名参数，只签 format 和 timestamp
-    const paramsToSign = `format=webp&timestamp=${timestamp}${apiSecret}`;
+    // 签名参数按字母序：eager → format → timestamp
+    const paramsToSign = `eager=${eagerTransform}&format=webp&timestamp=${timestamp}${apiSecret}`;
     const signature = await sha1Hex(paramsToSign);
 
     const formData = new FormData();
@@ -1756,9 +1759,10 @@ async function convertToWebPViaCloudinary(fileUrl, env) {
     formData.append('timestamp', timestamp);
     formData.append('signature', signature);
     formData.append('format',    'webp');
+    formData.append('eager',     eagerTransform);
 
     const uploadUrl = `https://api.cloudinary.com/v1_1/${cloudName}/image/upload`;
-    console.log(`请求 Cloudinary 转换图片 (quality=${quality}): ${uploadUrl}`);
+    console.log(`请求 Cloudinary 转换图片 (${eagerTransform}): ${uploadUrl}`);
 
     const uploadResponse = await fetch(uploadUrl, { method: 'POST', body: formData });
 
@@ -1769,18 +1773,19 @@ async function convertToWebPViaCloudinary(fileUrl, env) {
 
     const uploadResult = await uploadResponse.json();
     const publicId = uploadResult.public_id;
+    // eager 预处理后的结果 URL 直接在响应里，无需再拼 URL
+    const eagerUrl = uploadResult.eager?.[0]?.secure_url;
 
     if (!publicId) {
-        throw new Error('Cloudinary 未返回有效的 public_id');
+        throw new Error(`Cloudinary 未返回 public_id: ${JSON.stringify(uploadResult).substring(0, 200)}`);
+    }
+    if (!eagerUrl) {
+        throw new Error(`Cloudinary eager 未返回 URL: ${JSON.stringify(uploadResult).substring(0, 200)}`);
     }
 
-    // 通过 URL 变换参数控制质量：WEBP_QUALITY=101 时走无损模式（fl_lossless），否则用 q_ 有损压缩
-    const rawQuality  = Number(env.WEBP_QUALITY || 85);
-    const transform   = rawQuality === 101 ? 'fl_lossless' : `q_${quality}`;
-    const deliveryUrl = `https://res.cloudinary.com/${cloudName}/image/upload/${transform}/${publicId}.webp`;
-    console.log(`Cloudinary 转换成功，拉取 ${transform} 的 WebP: ${deliveryUrl}`);
+    console.log(`Cloudinary 转换成功，eager URL: ${eagerUrl}`);
 
-    const webpResponse = await fetch(deliveryUrl);
+    const webpResponse = await fetch(eagerUrl);
     if (!webpResponse.ok) {
         throw new Error(`获取 Cloudinary 转换后图片失败: ${webpResponse.status}`);
     }

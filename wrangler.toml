@@ -7,5 +7,5 @@ enabled = true
 
 [vars]
 WEBP_CONVERT = "cloudinary"
-WEBP_QUALITY = "101"
+WEBP_QUALITY = "90"
 ADMIN_ONLY = "true"

@@ -32,7 +32,7 @@
 | 变量 | 说明 |
 |------|------|
 | `WEBP_CONVERT` | 填 `imgproxy` 或 `cloudinary`，不填则不转换，直接上传原图 |
-| `WEBP_QUALITY` | WebP 质量，范围 1–100，默认 `85`。填 `101` 时可开启无损模式 |
+| `WEBP_QUALITY` | WebP 质量，范围 1–100，默认 `85`。使用 imgproxy 时填 `101` 时可开启无损模式 |
 
 **使用 imgproxy 时额外需要：**
 
