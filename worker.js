@@ -1774,9 +1774,11 @@ async function convertToWebPViaCloudinary(fileUrl, env) {
         throw new Error('Cloudinary 未返回有效的 public_id');
     }
 
-    // 通过 URL 变换参数 q_ 控制质量，拉取指定质量的 WebP
-    const deliveryUrl = `https://res.cloudinary.com/${cloudName}/image/upload/q_${quality}/${publicId}.webp`;
-    console.log(`Cloudinary 转换成功，拉取 quality=${quality} 的 WebP: ${deliveryUrl}`);
+    // 通过 URL 变换参数控制质量：WEBP_QUALITY=101 时走无损模式（fl_lossless），否则用 q_ 有损压缩
+    const rawQuality  = Number(env.WEBP_QUALITY || 85);
+    const transform   = rawQuality === 101 ? 'fl_lossless' : `q_${quality}`;
+    const deliveryUrl = `https://res.cloudinary.com/${cloudName}/image/upload/${transform}/${publicId}.webp`;
+    console.log(`Cloudinary 转换成功，拉取 ${transform} 的 WebP: ${deliveryUrl}`);
 
     const webpResponse = await fetch(deliveryUrl);
     if (!webpResponse.ok) {
