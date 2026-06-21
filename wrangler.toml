@@ -6,6 +6,6 @@ compatibility_date = "2025-04-16"
 enabled = true
 
 [vars]
-ENABLE_WEBP_CONVERT = "true"
-IMGPROXY_QUALITY = "99"
+WEBP_CONVERT = "cloudinary"
+WEBP_QUALITY = "99"
 ADMIN_ONLY = "true"
