@@ -1743,21 +1743,19 @@ async function convertToWebPViaCloudinary(fileUrl, env) {
         return null;
     }
 
-    const quality  = Math.min(100, Math.max(1, Number(env.WEBP_QUALITY || 85)));
+    const quality   = Math.min(100, Math.max(1, Number(env.WEBP_QUALITY || 85)));
     const timestamp = Math.floor(Date.now() / 1000).toString();
 
-    // 生成签名：SHA1("format=webp&quality=<q>&timestamp=<ts><secret>")
-    const paramsToSign = `format=webp&quality=${quality}&timestamp=${timestamp}${apiSecret}`;
+    // quality 不是 Cloudinary 上传 API 的签名参数，只签 format 和 timestamp
+    const paramsToSign = `format=webp&timestamp=${timestamp}${apiSecret}`;
     const signature = await sha1Hex(paramsToSign);
 
-    // 上传到 Cloudinary，带 format 和 quality transformation
     const formData = new FormData();
     formData.append('file',      fileUrl);
     formData.append('api_key',   apiKey);
     formData.append('timestamp', timestamp);
     formData.append('signature', signature);
     formData.append('format',    'webp');
-    formData.append('quality',   quality.toString());
 
     const uploadUrl = `https://api.cloudinary.com/v1_1/${cloudName}/image/upload`;
     console.log(`请求 Cloudinary 转换图片 (quality=${quality}): ${uploadUrl}`);
@@ -1770,17 +1768,17 @@ async function convertToWebPViaCloudinary(fileUrl, env) {
     }
 
     const uploadResult = await uploadResponse.json();
-    const webpUrl  = uploadResult.secure_url;
     const publicId = uploadResult.public_id;
 
-    if (!webpUrl) {
-        throw new Error('Cloudinary 未返回有效的 secure_url');
+    if (!publicId) {
+        throw new Error('Cloudinary 未返回有效的 public_id');
     }
 
-    console.log(`Cloudinary 转换成功，WebP URL: ${webpUrl}`);
+    // 通过 URL 变换参数 q_ 控制质量，拉取指定质量的 WebP
+    const deliveryUrl = `https://res.cloudinary.com/${cloudName}/image/upload/q_${quality}/${publicId}.webp`;
+    console.log(`Cloudinary 转换成功，拉取 quality=${quality} 的 WebP: ${deliveryUrl}`);
 
-    // 拉取转换后的 WebP 内容
-    const webpResponse = await fetch(webpUrl);
+    const webpResponse = await fetch(deliveryUrl);
     if (!webpResponse.ok) {
         throw new Error(`获取 Cloudinary 转换后图片失败: ${webpResponse.status}`);
     }
