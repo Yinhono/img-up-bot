@@ -639,15 +639,21 @@ async function handlePhoto(message, chatId, env) {
     let fileName = `image_${Date.now()}.jpg`;
     let mimeType = 'image/jpeg';
     
-    // 尝试调用 imgproxy 转换为 WebP
-    const converted = await convertToWebP(fileUrl, env);
+    // 尝试转换为 WebP；WEBP_FALLBACK=false 时转换失败直接报错，否则回落原图
+    let converted = null;
+    try {
+        converted = await convertToWebP(fileUrl, env);
+    } catch (err) {
+        if (env.WEBP_FALLBACK === 'false') throw err;
+        console.warn(`WebP 转换失败，回落原图: ${err.message}`);
+    }
     if (converted) {
         imgBuffer = converted.buffer;
         mimeType = converted.mimeType;
         fileName = `image_${Date.now()}.webp`;
         console.log('图片已成功转换为 WebP');
     } else {
-        // 转换未启用或失败，下载原图
+        // 转换未启用、失败回落或不需要转换，下载原图
         const imgResponse = await fetch(fileUrl);
         if (!imgResponse.ok) throw new Error(`获取图片失败: ${imgResponse.status}`);
         imgBuffer = await imgResponse.arrayBuffer();
@@ -1253,7 +1259,14 @@ async function handleDocument(message, chatId, env) {
       const shouldConvertImage = imageExts.includes(ext);
     
       if (shouldConvertImage) {
-          const converted = await convertToWebP(fileUrl, env);
+          // 尝试转换为 WebP；WEBP_FALLBACK=false 时转换失败直接报错，否则回落原图
+          let converted = null;
+          try {
+              converted = await convertToWebP(fileUrl, env);
+          } catch (err) {
+              if (env.WEBP_FALLBACK === 'false') throw err;
+              console.warn(`WebP 转换失败，回落原图: ${err.message}`);
+          }
           if (converted) {
               fileBuffer = converted.buffer;
               safeMimeType = converted.mimeType;
@@ -1587,6 +1600,10 @@ function getCorrectMimeType(fileName, fallbackMime) {
 //   WEBP_CONVERT=cloudinary  → 使用 Cloudinary
 //   WEBP_CONVERT=imgproxy    → 使用 imgproxy
 //   未设置 / 其他值           → 不转换，使用原图
+//
+// WEBP_FALLBACK（默认 true）：
+//   true  → 转换失败时回落原图继续上传
+//   false → 转换失败时直接报错终止
 async function convertToWebP(fileUrl, env) {
     const backend = (env.WEBP_CONVERT || '').toLowerCase().trim();
 
