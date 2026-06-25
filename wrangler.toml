@@ -6,7 +6,4 @@ compatibility_date = "2025-04-16"
 enabled = true
 
 [vars]
-WEBP_CONVERT = "cloudinary"
-WEBP_QUALITY = "90"
 ADMIN_ONLY = "true"
-WEBP_FALLBACK = "true"
